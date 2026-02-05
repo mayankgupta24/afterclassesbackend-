@@ -21,20 +21,26 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// 2. EMAIL SETUP (GMAIL) - Optimized for Render
+// 2. EMAIL SETUP (GMAIL) - FULLY OPTIMIZED FOR RENDER
+// Port 465 (SSL) use kar rahe hain jo timeout issues kam karta hai
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // 587 ke liye false hi rahega
+  port: 465, 
+  secure: true, // Port 465 ke liye ye TRUE hona zaroori hai
   auth: {
     user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASS // Tera App Password: njhrawznlgxyjoil
+    pass: process.env.EMAIL_PASS // Tera App Password
   },
   tls: {
-    rejectUnauthorized: false // Connection block hone se rokega
+    // Ye zaroori hai taaki server certificate reject na kare
+    rejectUnauthorized: false 
   },
-  connectionTimeout: 10000, 
-  greetingTimeout: 10000
+  // Timeout settings badha di hain taaki connection jaldi close na ho
+  connectionTimeout: 20000, // 20 seconds
+  greetingTimeout: 20000,
+  socketTimeout: 20000,
+  debug: true, // Logs mein details dikhegi
+  logger: true // Logs mein details dikhegi
 });
 
 // Check DB Connection
@@ -70,12 +76,15 @@ app.post('/api/auth/send-otp', async (req, res) => {
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
     const mailOptions = {
-      from: `"AfterClasses Security" <${process.env.EMAIL_USER}>`, // Same as authenticated user
+      from: `"AfterClasses Security" <${process.env.EMAIL_USER}>`, 
       to: email,
       subject: 'Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
+    console.log(`⏳ Attempting to send OTP to ${email} via Port 465...`);
+    
+    // Email send karte waqt wait karega
     await transporter.sendMail(mailOptions);
     console.log(`✅ OTP sent successfully to ${email}`);
     
@@ -83,11 +92,15 @@ app.post('/api/auth/send-otp', async (req, res) => {
       success: true, 
       message: 'OTP sent to email',
       isNewUser: existingUser.rows.length === 0,
-      otp: otp // Keep for debugging if needed
+      otp: otp // Debugging ke liye (Demo mein agar mail fail ho toh console mein dikh jayega)
     });
+
   } catch (error) {
-    console.error('❌ Send OTP error:', error);
-    res.status(500).json({ error: 'Failed to send OTP. Check App Password and Network.' });
+    console.error('❌ Send OTP FAILED:', error);
+    res.status(500).json({ 
+        error: 'Failed to send OTP. Network Error.',
+        details: error.message 
+    });
   }
 });
 
