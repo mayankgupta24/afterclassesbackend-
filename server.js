@@ -21,26 +21,24 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// 2. EMAIL SETUP (GMAIL) - FULLY OPTIMIZED FOR RENDER
-// Port 465 (SSL) use kar rahe hain jo timeout issues kam karta hai
+// 2. EMAIL SETUP (GMAIL AUTOMATIC SERVICE)
+// Hum manual port settings hata rahe hain kyunki wo block ho rahi hain
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465, 
-  secure: true, // Port 465 ke liye ye TRUE hona zaroori hai
+  service: 'gmail', // Ye automatic best settings utha lega
   auth: {
     user: process.env.EMAIL_USER, 
     pass: process.env.EMAIL_PASS // Tera App Password
-  },
-  tls: {
-    // Ye zaroori hai taaki server certificate reject na kare
-    rejectUnauthorized: false 
-  },
-  // Timeout settings badha di hain taaki connection jaldi close na ho
-  connectionTimeout: 20000, // 20 seconds
-  greetingTimeout: 20000,
-  socketTimeout: 20000,
-  debug: true, // Logs mein details dikhegi
-  logger: true // Logs mein details dikhegi
+  }
+});
+
+// Server Start hote hi check karega ki Email chalega ya nahi
+transporter.verify((error, success) => {
+  if (error) {
+    console.log('❌ CRITICAL EMAIL ERROR: Server cannot connect to Gmail.');
+    console.log(error);
+  } else {
+    console.log('✅ EMAIL SERVER CONNECTED: Ready to send real emails.');
+  }
 });
 
 // Check DB Connection
@@ -57,7 +55,7 @@ pool.connect((err, client, release) => {
 // 🚀 AUTHENTICATION & PROFILE
 // ==========================================
 
-// SEND OTP (Email Wala)
+// SEND OTP (Real Email)
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -76,15 +74,15 @@ app.post('/api/auth/send-otp', async (req, res) => {
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
     const mailOptions = {
-      from: `"AfterClasses Security" <${process.env.EMAIL_USER}>`, 
+      from: `"AfterClasses Team" <${process.env.EMAIL_USER}>`, 
       to: email,
-      subject: 'Login OTP - AfterClasses',
-      text: `Your OTP is: ${otp}. Valid for 5 minutes.`
+      subject: 'Your Login OTP',
+      text: `Your OTP is: ${otp}. Do not share this with anyone.`
     };
 
-    console.log(`⏳ Attempting to send OTP to ${email} via Port 465...`);
+    console.log(`⏳ Sending OTP to ${email}...`);
     
-    // Email send karte waqt wait karega
+    // Email bhejo
     await transporter.sendMail(mailOptions);
     console.log(`✅ OTP sent successfully to ${email}`);
     
@@ -92,13 +90,12 @@ app.post('/api/auth/send-otp', async (req, res) => {
       success: true, 
       message: 'OTP sent to email',
       isNewUser: existingUser.rows.length === 0,
-      otp: otp // Debugging ke liye (Demo mein agar mail fail ho toh console mein dikh jayega)
     });
 
   } catch (error) {
-    console.error('❌ Send OTP FAILED:', error);
+    console.error('❌ SEND OTP FAILED:', error);
     res.status(500).json({ 
-        error: 'Failed to send OTP. Network Error.',
+        error: 'Failed to send OTP due to Server Block.',
         details: error.message 
     });
   }
