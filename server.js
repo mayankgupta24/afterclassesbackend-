@@ -21,13 +21,20 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// 2. EMAIL SETUP (GMAIL)
+// 2. EMAIL SETUP (GMAIL) - Optimized for Render
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // 587 ke liye false hi rahega
   auth: {
     user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASS
-  }
+    pass: process.env.EMAIL_PASS // Tera App Password: njhrawznlgxyjoil
+  },
+  tls: {
+    rejectUnauthorized: false // Connection block hone se rokega
+  },
+  connectionTimeout: 10000, 
+  greetingTimeout: 10000
 });
 
 // Check DB Connection
@@ -63,24 +70,24 @@ app.post('/api/auth/send-otp', async (req, res) => {
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
     const mailOptions = {
-      from: '"AfterClasses Security" <noreply@afterclasses.in>',
+      from: `"AfterClasses Security" <${process.env.EMAIL_USER}>`, // Same as authenticated user
       to: email,
       subject: 'Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`OTP sent to ${email}`);
+    console.log(`✅ OTP sent successfully to ${email}`);
     
     res.json({ 
       success: true, 
       message: 'OTP sent to email',
       isNewUser: existingUser.rows.length === 0,
-      otp: otp 
+      otp: otp // Keep for debugging if needed
     });
   } catch (error) {
-    console.error('Send OTP error:', error);
-    res.status(500).json({ error: 'Failed to send OTP' });
+    console.error('❌ Send OTP error:', error);
+    res.status(500).json({ error: 'Failed to send OTP. Check App Password and Network.' });
   }
 });
 
@@ -160,21 +167,18 @@ app.post('/api/match/approach', async (req, res) => {
 });
 
 // ==========================================
-// 🌍 EXTRA FEATURES (Taki Frontend Khali Na Dikhe)
+// 🌍 EXTRA FEATURES
 // ==========================================
 
-// SHOWUPS
 app.get('/api/showups/active', async (req, res) => {
   try {
-    // Agar showups table khali hai toh empty array bhejega, crash nahi karega
     const result = await pool.query(`SELECT s.*, u.name as creator_name, u.avatar as creator_avatar FROM showups s JOIN users u ON s.creator_id = u.id WHERE s.is_active = true`);
     res.json({ showups: result.rows });
   } catch (error) {
-    res.json({ showups: [] }); // Safe fallback
+    res.json({ showups: [] }); 
   }
 });
 
-// BUILDROOM
 app.get('/api/buildroom/posts', async (req, res) => {
   try {
     const result = await pool.query(`SELECT p.*, u.name as creator_name FROM buildroom_posts p JOIN users u ON p.creator_id = u.id`);
@@ -184,7 +188,6 @@ app.get('/api/buildroom/posts', async (req, res) => {
   }
 });
 
-// VENT
 app.get('/api/vent/posts', async (req, res) => {
   try {
     const { category } = req.query;
@@ -195,7 +198,6 @@ app.get('/api/vent/posts', async (req, res) => {
   }
 });
 
-// SKILLMATES
 app.get('/api/skillmates', async (req, res) => {
   try {
     const result = await pool.query(`SELECT s.*, u.name, u.avatar FROM skillmates s JOIN users u ON s.user_id = u.id`);
