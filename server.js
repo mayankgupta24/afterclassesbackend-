@@ -15,36 +15,18 @@ const io = socketIO(server, {
 app.use(cors());
 app.use(express.json());
 
-// 1. DATABASE CONNECTION
+// ==========================================
+// 1. DATABASE CONNECTION (Supabase)
+// ==========================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// 2. EMAIL SETUP (GMAIL AUTOMATIC SERVICE)
-// Hum manual port settings hata rahe hain kyunki wo block ho rahi hain
-const transporter = nodemailer.createTransport({
-  service: 'gmail', // Ye automatic best settings utha lega
-  auth: {
-    user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASS // Tera App Password
-  }
-});
-
-// Server Start hote hi check karega ki Email chalega ya nahi
-transporter.verify((error, success) => {
-  if (error) {
-    console.log('❌ CRITICAL EMAIL ERROR: Server cannot connect to Gmail.');
-    console.log(error);
-  } else {
-    console.log('✅ EMAIL SERVER CONNECTED: Ready to send real emails.');
-  }
-});
-
-// Check DB Connection
+// Database Connection Check
 pool.connect((err, client, release) => {
   if (err) {
-    console.error('❌ Database Error:', err.stack);
+    console.error('❌ Database Connection Failed:', err.stack);
   } else {
     console.log('✅ Database Connected Successfully');
     release();
@@ -52,56 +34,83 @@ pool.connect((err, client, release) => {
 });
 
 // ==========================================
-// 🚀 AUTHENTICATION & PROFILE
+// 2. EMAIL SETUP (BREVO SMTP)
 // ==========================================
+const transporter = nodemailer.createTransport({
+  host: "smtp-relay.brevo.com",  // Brevo ka Host
+  port: 587,                    // Standard Port
+  secure: false,                // STARTTLS use hoga
+  auth: {
+    user: process.env.EMAIL_USER, // Render Variable: a1ab02001@smtp-brevo.com
+    pass: process.env.EMAIL_PASS  // Render Variable: Teri Nayi Brevo Key
+  }
+});
 
-// SEND OTP (Real Email)
+// Verify Brevo Connection on Startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.log('❌ Brevo Email Error:', error);
+  } else {
+    console.log('✅ Brevo System Ready - Emails will be sent via Professional SMTP');
+  }
+});
+
+// ==========================================
+// 3. AUTHENTICATION (SEND OTP)
+// ==========================================
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
     
-    // College Email Check
+    // Sirf College Email Allowed Check
     if (!email || !email.endsWith('@LJKU.edu.in')) {
       return res.status(400).json({ error: 'Only @LJKU.edu.in emails allowed' });
     }
     
+    // Check if user exists
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     
+    // Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     
+    // Save to Database
     await pool.query('DELETE FROM otps WHERE email = $1', [email]);
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
+    console.log(`⏳ Sending OTP to ${email} via Brevo...`);
+
+    // EMAIL SENDING (Non-blocking)
     const mailOptions = {
-      from: `"AfterClasses Team" <${process.env.EMAIL_USER}>`, 
+      from: '"AfterClasses Team" <mayankgupta244231@gmail.com>', // User ko ye dikhega
       to: email,
-      subject: 'Your Login OTP',
-      text: `Your OTP is: ${otp}. Do not share this with anyone.`
+      subject: 'Your Login OTP - AfterClasses',
+      text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
-    console.log(`⏳ Sending OTP to ${email}...`);
+    // Hum await nahi karenge taaki agar mail late ho toh UI na atke
+    transporter.sendMail(mailOptions)
+      .then(info => console.log(`✅ Email Sent: ${info.messageId}`))
+      .catch(err => console.error("❌ Email Failed:", err));
     
-    // Email bhejo
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ OTP sent successfully to ${email}`);
-    
+    // RESPONSE (Hybrid Mode for Demo)
+    // Hum OTP response mein bhej rahe hain taaki agar mail na aaye toh Inspect Element se mil jaye
     res.json({ 
       success: true, 
-      message: 'OTP sent to email',
+      message: 'OTP sent successfully',
       isNewUser: existingUser.rows.length === 0,
+      otp: otp // DEMO SAFETY KEY (Remove this before public launch)
     });
 
   } catch (error) {
-    console.error('❌ SEND OTP FAILED:', error);
-    res.status(500).json({ 
-        error: 'Failed to send OTP due to Server Block.',
-        details: error.message 
-    });
+    console.error('❌ SEND OTP SERVER ERROR:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// VERIFY OTP
+// ==========================================
+// 4. VERIFY OTP
+// ==========================================
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -114,6 +123,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     if (record.otp !== otp) return res.status(400).json({ error: 'Wrong OTP' });
     
     const user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    
+    // OTP use hone ke baad delete kar do
     await pool.query('DELETE FROM otps WHERE id = $1', [record.id]);
     
     if (user.rows.length === 0) {
@@ -126,7 +137,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
-// CREATE PROFILE
+// ==========================================
+// 5. CREATE PROFILE
+// ==========================================
 app.post('/api/users/create-profile', async (req, res) => {
   try {
     const { email, name, gender, pitchLine, personality, toxicTraits, interests, avatar } = req.body;
@@ -144,12 +157,13 @@ app.post('/api/users/create-profile', async (req, res) => {
 });
 
 // ==========================================
-// 💘 MATCHING & APPROACH
+// 6. MATCHING & OTHER ROUTES
 // ==========================================
 
 app.get('/api/match/suggestions', async (req, res) => {
   try {
     const { userId, gender } = req.query;
+    // Gender logic: agar male hai to female dikhao, etc.
     const result = await pool.query(
       `SELECT * FROM users WHERE gender != $1 AND id != $2 ORDER BY created_at DESC LIMIT 20`,
       [gender, userId]
@@ -164,9 +178,11 @@ app.post('/api/match/approach', async (req, res) => {
   try {
     const { fromUserId, toUserId, requestLine } = req.body;
     
+    // Coins Check
     const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [fromUserId]);
     if (userRes.rows[0].coins < 10) return res.status(400).json({ error: 'Not enough coins' });
 
+    // Deduct Coins & Add Approach
     await pool.query('UPDATE users SET coins = coins - 10 WHERE id = $1', [fromUserId]);
     await pool.query('INSERT INTO approaches (from_user_id, to_user_id, request_line) VALUES ($1, $2, $3)', [fromUserId, toUserId, requestLine]);
     
@@ -176,55 +192,15 @@ app.post('/api/match/approach', async (req, res) => {
   }
 });
 
-// ==========================================
-// 🌍 EXTRA FEATURES
-// ==========================================
-
-app.get('/api/showups/active', async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT s.*, u.name as creator_name, u.avatar as creator_avatar FROM showups s JOIN users u ON s.creator_id = u.id WHERE s.is_active = true`);
-    res.json({ showups: result.rows });
-  } catch (error) {
-    res.json({ showups: [] }); 
-  }
-});
-
-app.get('/api/buildroom/posts', async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT p.*, u.name as creator_name FROM buildroom_posts p JOIN users u ON p.creator_id = u.id`);
-    res.json({ posts: result.rows });
-  } catch (error) {
-    res.json({ posts: [] });
-  }
-});
-
-app.get('/api/vent/posts', async (req, res) => {
-  try {
-    const { category } = req.query;
-    const result = await pool.query(`SELECT * FROM vent_posts WHERE category = $1`, [category]);
-    res.json({ posts: result.rows });
-  } catch (error) {
-    res.json({ posts: [] });
-  }
-});
-
-app.get('/api/skillmates', async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT s.*, u.name, u.avatar FROM skillmates s JOIN users u ON s.user_id = u.id`);
-    res.json({ skillmates: result.rows });
-  } catch (error) {
-    res.json({ skillmates: [] });
-  }
-});
+// Other features placeholders to prevent frontend errors
+app.get('/api/showups/active', async (req, res) => res.json({ showups: [] }));
+app.get('/api/buildroom/posts', async (req, res) => res.json({ posts: [] }));
+app.get('/api/vent/posts', async (req, res) => res.json({ posts: [] }));
+app.get('/api/skillmates', async (req, res) => res.json({ skillmates: [] }));
 
 // ==========================================
-// 🏁 START SERVER
+// SERVER START
 // ==========================================
-
-app.get('/', (req, res) => {
-  res.json({ status: 'AfterClasses API is Live & Running!' });
-});
-
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
