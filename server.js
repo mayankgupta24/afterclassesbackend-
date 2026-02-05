@@ -23,7 +23,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Database Connection Check
 pool.connect((err, client, release) => {
   if (err) {
     console.error('❌ Database Connection Failed:', err.stack);
@@ -34,72 +33,68 @@ pool.connect((err, client, release) => {
 });
 
 // ==========================================
-// 2. EMAIL SETUP (BREVO SMTP)
+// 2. EMAIL SETUP (BREVO SMTP - PROFESSIONAL)
 // ==========================================
 const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",  // Brevo ka Host
-  port: 587,                    // Standard Port
-  secure: false,                // STARTTLS use hoga
+  host: "smtp-relay.brevo.com",
+  port: 587,
+  secure: false, // STARTTLS
   auth: {
-    user: process.env.EMAIL_USER, // Render Variable: a1ab02001@smtp-brevo.com
-    pass: process.env.EMAIL_PASS  // Render Variable: Teri Nayi Brevo Key
+    user: process.env.EMAIL_USER, // a1ab02001@smtp-brevo.com
+    pass: process.env.EMAIL_PASS  // Teri Brevo API Key
   }
 });
 
-// Verify Brevo Connection on Startup
 transporter.verify((error, success) => {
   if (error) {
     console.log('❌ Brevo Email Error:', error);
   } else {
-    console.log('✅ Brevo System Ready - Emails will be sent via Professional SMTP');
+    console.log('✅ Brevo System Ready - Emails will be sent securely');
   }
 });
 
 // ==========================================
-// 3. AUTHENTICATION (SEND OTP)
+// 3. AUTHENTICATION (SECURE SEND OTP)
 // ==========================================
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
     
-    // Sirf College Email Allowed Check
+    // Validate Domain
     if (!email || !email.endsWith('@LJKU.edu.in')) {
       return res.status(400).json({ error: 'Only @LJKU.edu.in emails allowed' });
     }
     
-    // Check if user exists
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     
     // Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     
-    // Save to Database
+    // Save OTP to DB
     await pool.query('DELETE FROM otps WHERE email = $1', [email]);
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
     console.log(`⏳ Sending OTP to ${email} via Brevo...`);
 
-    // EMAIL SENDING (Non-blocking)
+    // Send Email
     const mailOptions = {
-      from: '"AfterClasses Team" <mayankgupta244231@gmail.com>', // User ko ye dikhega
+      from: '"AfterClasses Team" <mayankgupta244231@gmail.com>',
       to: email,
       subject: 'Your Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
-    // Hum await nahi karenge taaki agar mail late ho toh UI na atke
     transporter.sendMail(mailOptions)
       .then(info => console.log(`✅ Email Sent: ${info.messageId}`))
       .catch(err => console.error("❌ Email Failed:", err));
     
-    // RESPONSE (Hybrid Mode for Demo)
-    // Hum OTP response mein bhej rahe hain taaki agar mail na aaye toh Inspect Element se mil jaye
+    // RESPONSE (SECURE: NO OTP IN RESPONSE)
+    // Maine yahan se 'otp' variable hata diya hai. Ab hack karke bhi koi OTP nahi dekh payega.
     res.json({ 
       success: true, 
-      message: 'OTP sent successfully',
-      isNewUser: existingUser.rows.length === 0,
-      otp: otp // DEMO SAFETY KEY (Remove this before public launch)
+      message: 'OTP sent to your email! Please check your inbox.',
+      isNewUser: existingUser.rows.length === 0
     });
 
   } catch (error) {
@@ -124,7 +119,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     
     const user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     
-    // OTP use hone ke baad delete kar do
+    // Delete used OTP
     await pool.query('DELETE FROM otps WHERE id = $1', [record.id]);
     
     if (user.rows.length === 0) {
@@ -159,11 +154,9 @@ app.post('/api/users/create-profile', async (req, res) => {
 // ==========================================
 // 6. MATCHING & OTHER ROUTES
 // ==========================================
-
 app.get('/api/match/suggestions', async (req, res) => {
   try {
     const { userId, gender } = req.query;
-    // Gender logic: agar male hai to female dikhao, etc.
     const result = await pool.query(
       `SELECT * FROM users WHERE gender != $1 AND id != $2 ORDER BY created_at DESC LIMIT 20`,
       [gender, userId]
@@ -178,11 +171,9 @@ app.post('/api/match/approach', async (req, res) => {
   try {
     const { fromUserId, toUserId, requestLine } = req.body;
     
-    // Coins Check
     const userRes = await pool.query('SELECT coins FROM users WHERE id = $1', [fromUserId]);
     if (userRes.rows[0].coins < 10) return res.status(400).json({ error: 'Not enough coins' });
 
-    // Deduct Coins & Add Approach
     await pool.query('UPDATE users SET coins = coins - 10 WHERE id = $1', [fromUserId]);
     await pool.query('INSERT INTO approaches (from_user_id, to_user_id, request_line) VALUES ($1, $2, $3)', [fromUserId, toUserId, requestLine]);
     
@@ -192,7 +183,7 @@ app.post('/api/match/approach', async (req, res) => {
   }
 });
 
-// Other features placeholders to prevent frontend errors
+// Placeholders to prevent frontend crashes
 app.get('/api/showups/active', async (req, res) => res.json({ showups: [] }));
 app.get('/api/buildroom/posts', async (req, res) => res.json({ posts: [] }));
 app.get('/api/vent/posts', async (req, res) => res.json({ posts: [] }));
