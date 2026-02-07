@@ -29,26 +29,34 @@ pool.connect((err) => {
 });
 
 // ==========================================
-// 2. EMAIL SETUP (BREVO SMTP)
+// 2. EMAIL SETUP (BREVO SMTP - PORT FIXED)
 // ==========================================
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.brevo.com",
-  port: 587,
-  secure: false, 
+  port: 465,       // ✅ FIXED: 587 ki jagah 465 (SSL) use kar rahe hain
+  secure: true,    // ✅ FIXED: Port 465 ke liye ye true hona chahiye
   auth: {
     user: process.env.EMAIL_USER, // Brevo Login Email
     pass: process.env.EMAIL_PASS  // Brevo API Key
   }
 });
 
+// Verify connection configuration
+transporter.verify(function (error, success) {
+  if (error) {
+    console.log("❌ SMTP Connection Error:", error);
+  } else {
+    console.log("✅ SMTP Server is ready to take our messages");
+  }
+});
+
 // ==========================================
-// 3. AUTHENTICATION (REAL EMAIL ONLY)
+// 3. AUTHENTICATION (REAL EMAIL)
 // ==========================================
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
     
-    // Validation: Email required
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
@@ -67,17 +75,16 @@ app.post('/api/auth/send-otp', async (req, res) => {
 
     // Send Real Email
     const mailOptions = {
-      from: '"AfterClasses Team" <otp@afterclasses.in>', // Ensure this domain is verified in Brevo
+      from: '"AfterClasses Team" <otp@afterclasses.in>', // Ya jo email verify hai wo use karo
       to: email,
       subject: 'Your Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
-    // Wait for email to send (Critical for Real Mode)
+    // Wait for email to send
     await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent to ${email}`);
+    console.log(`✅ Email sent successfully to ${email}`);
     
-    // SUCCESS RESPONSE (SECURE: NO OTP IN RESPONSE)
     res.json({ 
       success: true, 
       message: 'OTP sent successfully to your email!',
@@ -86,7 +93,8 @@ app.post('/api/auth/send-otp', async (req, res) => {
 
   } catch (error) {
     console.error('❌ SEND OTP ERROR:', error);
-    res.status(500).json({ error: 'Failed to send email. Check SMTP settings.' });
+    // Agar 465 bhi fail ho, toh frontend ko bata do
+    res.status(500).json({ error: 'Failed to send email. Server Timeout.' });
   }
 });
 
@@ -219,7 +227,7 @@ app.get('/api/chat/history/:userId/:otherUserId', async (req, res) => {
   }
 });
 
-// Placeholder Routes
+// Placeholders
 app.get('/api/showups/active', async (req, res) => res.json({ showups: [] }));
 app.get('/api/buildroom/posts', async (req, res) => res.json({ posts: [] }));
 app.get('/api/vent/posts', async (req, res) => res.json({ posts: [] }));
