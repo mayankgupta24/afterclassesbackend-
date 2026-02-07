@@ -33,36 +33,28 @@ pool.connect((err, client, release) => {
 });
 
 // ==========================================
-// 2. EMAIL SETUP (BREVO SMTP - PROFESSIONAL)
+// 2. EMAIL SETUP (BREVO SMTP)
 // ==========================================
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.brevo.com",
   port: 587,
-  secure: false, // STARTTLS
+  secure: false, 
   auth: {
-    user: process.env.EMAIL_USER, // a1ab02001@smtp-brevo.com
-    pass: process.env.EMAIL_PASS  // Teri Brevo API Key
-  }
-});
-
-transporter.verify((error, success) => {
-  if (error) {
-    console.log('❌ Brevo Email Error:', error);
-  } else {
-    console.log('✅ Brevo System Ready - Emails will be sent securely');
+    user: process.env.EMAIL_USER, 
+    pass: process.env.EMAIL_PASS  
   }
 });
 
 // ==========================================
-// 3. AUTHENTICATION (SECURE SEND OTP)
+// 3. AUTHENTICATION (ANY EMAIL + DEMO MODE)
 // ==========================================
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
     
-    // Validate Domain
-    if (!email || !email.endsWith('@LJKU.edu.in')) {
-      return res.status(400).json({ error: 'Only @LJKU.edu.in emails allowed' });
+    // CHANGE 1: Domain Validation Removed
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
     }
     
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
@@ -75,11 +67,11 @@ app.post('/api/auth/send-otp', async (req, res) => {
     await pool.query('DELETE FROM otps WHERE email = $1', [email]);
     await pool.query('INSERT INTO otps (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
     
-    console.log(`⏳ Sending OTP to ${email} via Brevo...`);
+    console.log(`⏳ Sending OTP to ${email}...`);
 
-    // Send Email
+    // Send Email (Background Process - Won't block response)
     const mailOptions = {
-      from: '"AfterClasses Team" <mayankgupta244231@gmail.com>',
+      from: '"AfterClasses Team" <otp@afterclasses.in>', // Tera domain ya verified email
       to: email,
       subject: 'Your Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
@@ -87,14 +79,15 @@ app.post('/api/auth/send-otp', async (req, res) => {
 
     transporter.sendMail(mailOptions)
       .then(info => console.log(`✅ Email Sent: ${info.messageId}`))
-      .catch(err => console.error("❌ Email Failed:", err));
+      .catch(err => console.error("❌ Email Failed (Demo Bypass Active):", err));
     
-    // RESPONSE (SECURE: NO OTP IN RESPONSE)
-    // Maine yahan se 'otp' variable hata diya hai. Ab hack karke bhi koi OTP nahi dekh payega.
+    // CHANGE 2: DEMO MODE RESPONSE
+    // Hum 'otp' variable wapas bhej rahe hain taaki frontend popup mein dikha sake.
     res.json({ 
       success: true, 
-      message: 'OTP sent to your email! Please check your inbox.',
-      isNewUser: existingUser.rows.length === 0
+      message: 'OTP sent! (Demo Mode: Check Popup)',
+      isNewUser: existingUser.rows.length === 0,
+      otp: otp // <--- Ye demo bachayega tera
     });
 
   } catch (error) {
@@ -103,9 +96,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
   }
 });
 
-// ==========================================
-// 4. VERIFY OTP
-// ==========================================
+// Verify OTP
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -133,7 +124,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 });
 
 // ==========================================
-// 5. CREATE PROFILE
+// 4. PROFILE & MATCHING
 // ==========================================
 app.post('/api/users/create-profile', async (req, res) => {
   try {
@@ -151,15 +142,13 @@ app.post('/api/users/create-profile', async (req, res) => {
   }
 });
 
-// ==========================================
-// 6. MATCHING & OTHER ROUTES
-// ==========================================
 app.get('/api/match/suggestions', async (req, res) => {
   try {
-    const { userId, gender } = req.query;
+    const { userId } = req.query;
+    // Update: Showing ALL users except myself (Better for demo)
     const result = await pool.query(
-      `SELECT * FROM users WHERE gender != $1 AND id != $2 ORDER BY created_at DESC LIMIT 20`,
-      [gender, userId]
+      `SELECT * FROM users WHERE id != $1 ORDER BY created_at DESC LIMIT 20`,
+      [userId]
     );
     res.json({ users: result.rows });
   } catch (error) {
@@ -183,7 +172,70 @@ app.post('/api/match/approach', async (req, res) => {
   }
 });
 
-// Placeholders to prevent frontend crashes
+// ==========================================
+// 5. CHAT SYSTEM (REAL-TIME SOCKET.IO)
+// ==========================================
+
+const onlineUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log('⚡ User Connected:', socket.id);
+
+  // User online status
+  socket.on('user_connected', (userId) => {
+    onlineUsers.set(userId, socket.id);
+    io.emit('online_users', Array.from(onlineUsers.keys()));
+  });
+
+  // Join private room
+  socket.on('join_room', ({ userId, otherUserId }) => {
+    const roomName = [userId, otherUserId].sort().join('_');
+    socket.join(roomName);
+    console.log(`User ${userId} joined room: ${roomName}`);
+  });
+
+  // Send message
+  socket.on('send_message', async (data) => {
+    const { senderId, receiverId, message } = data;
+    const roomName = [senderId, receiverId].sort().join('_');
+
+    try {
+      // 1. Save to DB
+      const savedMsg = await pool.query(
+        'INSERT INTO messages (sender_id, receiver_id, message) VALUES ($1, $2, $3) RETURNING *',
+        [senderId, receiverId, message]
+      );
+
+      // 2. Emit to Room
+      io.to(roomName).emit('receive_message', savedMsg.rows[0]);
+    } catch (err) {
+      console.error('Chat Error:', err);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User Disconnected');
+  });
+});
+
+// Get Chat History
+app.get('/api/chat/history/:userId/:otherUserId', async (req, res) => {
+  const { userId, otherUserId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM messages 
+       WHERE (sender_id = $1 AND receiver_id = $2) 
+       OR (sender_id = $2 AND receiver_id = $1) 
+       ORDER BY created_at ASC`,
+      [userId, otherUserId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch chat history' });
+  }
+});
+
+// Placeholders
 app.get('/api/showups/active', async (req, res) => res.json({ showups: [] }));
 app.get('/api/buildroom/posts', async (req, res) => res.json({ posts: [] }));
 app.get('/api/vent/posts', async (req, res) => res.json({ posts: [] }));
