@@ -16,20 +16,16 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. DATABASE CONNECTION (Supabase)
+// 1. DATABASE CONNECTION
 // ==========================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-pool.connect((err, client, release) => {
-  if (err) {
-    console.error('❌ Database Connection Failed:', err.stack);
-  } else {
-    console.log('✅ Database Connected Successfully');
-    release();
-  }
+pool.connect((err) => {
+  if (err) console.error('❌ Database Connection Failed:', err.stack);
+  else console.log('✅ Database Connected Successfully');
 });
 
 // ==========================================
@@ -40,19 +36,19 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false, 
   auth: {
-    user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASS  
+    user: process.env.EMAIL_USER, // Brevo Login Email
+    pass: process.env.EMAIL_PASS  // Brevo API Key
   }
 });
 
 // ==========================================
-// 3. AUTHENTICATION (ANY EMAIL + DEMO MODE)
+// 3. AUTHENTICATION (REAL EMAIL ONLY)
 // ==========================================
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
     
-    // CHANGE 1: Domain Validation Removed
+    // Validation: Email required
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
@@ -61,7 +57,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
     
     // Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
     
     // Save OTP to DB
     await pool.query('DELETE FROM otps WHERE email = $1', [email]);
@@ -69,30 +65,28 @@ app.post('/api/auth/send-otp', async (req, res) => {
     
     console.log(`⏳ Sending OTP to ${email}...`);
 
-    // Send Email (Background Process - Won't block response)
+    // Send Real Email
     const mailOptions = {
-      from: '"AfterClasses Team" <otp@afterclasses.in>', // Tera domain ya verified email
+      from: '"AfterClasses Team" <otp@afterclasses.in>', // Ensure this domain is verified in Brevo
       to: email,
       subject: 'Your Login OTP - AfterClasses',
       text: `Your OTP is: ${otp}. Valid for 5 minutes.`
     };
 
-    transporter.sendMail(mailOptions)
-      .then(info => console.log(`✅ Email Sent: ${info.messageId}`))
-      .catch(err => console.error("❌ Email Failed (Demo Bypass Active):", err));
+    // Wait for email to send (Critical for Real Mode)
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent to ${email}`);
     
-    // CHANGE 2: DEMO MODE RESPONSE
-    // Hum 'otp' variable wapas bhej rahe hain taaki frontend popup mein dikha sake.
+    // SUCCESS RESPONSE (SECURE: NO OTP IN RESPONSE)
     res.json({ 
       success: true, 
-      message: 'OTP sent! (Demo Mode: Check Popup)',
-      isNewUser: existingUser.rows.length === 0,
-      otp: otp // <--- Ye demo bachayega tera
+      message: 'OTP sent successfully to your email!',
+      isNewUser: existingUser.rows.length === 0
     });
 
   } catch (error) {
-    console.error('❌ SEND OTP SERVER ERROR:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('❌ SEND OTP ERROR:', error);
+    res.status(500).json({ error: 'Failed to send email. Check SMTP settings.' });
   }
 });
 
@@ -145,7 +139,6 @@ app.post('/api/users/create-profile', async (req, res) => {
 app.get('/api/match/suggestions', async (req, res) => {
   try {
     const { userId } = req.query;
-    // Update: Showing ALL users except myself (Better for demo)
     const result = await pool.query(
       `SELECT * FROM users WHERE id != $1 ORDER BY created_at DESC LIMIT 20`,
       [userId]
@@ -173,40 +166,32 @@ app.post('/api/match/approach', async (req, res) => {
 });
 
 // ==========================================
-// 5. CHAT SYSTEM (REAL-TIME SOCKET.IO)
+// 5. CHAT SYSTEM (SOCKET.IO)
 // ==========================================
-
 const onlineUsers = new Map();
 
 io.on('connection', (socket) => {
   console.log('⚡ User Connected:', socket.id);
 
-  // User online status
   socket.on('user_connected', (userId) => {
     onlineUsers.set(userId, socket.id);
     io.emit('online_users', Array.from(onlineUsers.keys()));
   });
 
-  // Join private room
   socket.on('join_room', ({ userId, otherUserId }) => {
     const roomName = [userId, otherUserId].sort().join('_');
     socket.join(roomName);
-    console.log(`User ${userId} joined room: ${roomName}`);
   });
 
-  // Send message
   socket.on('send_message', async (data) => {
     const { senderId, receiverId, message } = data;
     const roomName = [senderId, receiverId].sort().join('_');
 
     try {
-      // 1. Save to DB
       const savedMsg = await pool.query(
         'INSERT INTO messages (sender_id, receiver_id, message) VALUES ($1, $2, $3) RETURNING *',
         [senderId, receiverId, message]
       );
-
-      // 2. Emit to Room
       io.to(roomName).emit('receive_message', savedMsg.rows[0]);
     } catch (err) {
       console.error('Chat Error:', err);
@@ -218,7 +203,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Get Chat History
 app.get('/api/chat/history/:userId/:otherUserId', async (req, res) => {
   const { userId, otherUserId } = req.params;
   try {
@@ -235,15 +219,12 @@ app.get('/api/chat/history/:userId/:otherUserId', async (req, res) => {
   }
 });
 
-// Placeholders
+// Placeholder Routes
 app.get('/api/showups/active', async (req, res) => res.json({ showups: [] }));
 app.get('/api/buildroom/posts', async (req, res) => res.json({ posts: [] }));
 app.get('/api/vent/posts', async (req, res) => res.json({ posts: [] }));
 app.get('/api/skillmates', async (req, res) => res.json({ skillmates: [] }));
 
-// ==========================================
-// SERVER START
-// ==========================================
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
